@@ -12,7 +12,7 @@ import shapely.geometry
 
 
 class TestCatalog:
-    imagery_collections = ['wv01', 'wv02', 'wv03-vnir' 'wv03-swir', 'wv04', 'ge01']
+    imagery_collections = ['wv01', 'wv02', 'wv03-vnir', 'wv03-swir', 'wv04', 'ge01']
 
     @staticmethod
     def test_healthcheck(catalog):
