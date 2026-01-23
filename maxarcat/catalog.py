@@ -111,7 +111,7 @@ class Catalog:
         # }
 
         Catalog.logger.info(f'Requesting token from {auth_url}')
-        response = requests.post(auth_url, auth=(username, password))
+        response = requests.post(auth_url, auth=(username, password), timeout=30)
         try:
             body = json.loads(response.text)
         except Exception as exp:
