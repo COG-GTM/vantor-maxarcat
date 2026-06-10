@@ -10,6 +10,7 @@ import json
 import re
 import hashlib
 import hmac
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Optional
 from enum import Enum
@@ -107,8 +108,36 @@ class DevinSessionResponse(BaseModel):
     session_url: str
 
 
-issues_db: dict[str, dict] = {}
-assessments_db: dict[str, AssessmentResult] = {}
+MAX_DB_SIZE = int(os.getenv("ISSUE_DEPOT_MAX_DB_SIZE", "10000"))
+
+
+class LRUDict(OrderedDict):
+    """Bounded dict that evicts the least-recently-used entry once max_size is reached."""
+
+    def __init__(self, max_size: int = MAX_DB_SIZE):
+        self.max_size = max_size
+        super().__init__()
+
+    def __getitem__(self, key):
+        value = super().__getitem__(key)
+        self.move_to_end(key)
+        return value
+
+    def __setitem__(self, key, value):
+        if key in self:
+            self.move_to_end(key)
+        super().__setitem__(key, value)
+        while len(self) > self.max_size:
+            evicted_key, _ = self.popitem(last=False)
+            print(json.dumps({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "event": "cache_eviction",
+                "details": {"evicted_key": evicted_key, "max_size": self.max_size}
+            }))
+
+
+issues_db: LRUDict = LRUDict()
+assessments_db: LRUDict = LRUDict()
 
 
 def log_security_event(event_type: str, client_ip: str, details: Optional[dict] = None):
@@ -294,8 +323,10 @@ async def receive_bug_report(
     
     assessment = assess_bug_severity(bug)
     
+    bug_data = bug.model_dump()
+    bug_data.pop("raw_payload", None)
     issues_db[issue_id] = {
-        "bug": bug.model_dump(),
+        "bug": bug_data,
         "assessment": assessment.model_dump(),
         "status": "assessed",
         "created_at": datetime.now(timezone.utc).isoformat()

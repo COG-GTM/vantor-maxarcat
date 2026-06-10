@@ -8,6 +8,7 @@ import collections.abc as abc
 import getpass
 import json
 import logging
+import weakref
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Optional, Tuple, Union
@@ -44,10 +45,29 @@ class Catalog:
         self.url = url if url else self.default_catalog_url
         self.last_response = None
 
-        # Setup the swagger clients
-        self._stac_api = self._setup_api(maxarcat_client.STACApi())
-        self._coll_api = self._setup_api(maxarcat_client.STACCOLLECTIONApi())
-        self._item_api = self._setup_api(maxarcat_client.STACITEMApi())
+        # Setup the swagger clients, sharing a single ApiClient (and its
+        # underlying ThreadPool / connection pool) across all API objects.
+        self._api_client = maxarcat_client.ApiClient()
+        self._stac_api = self._setup_api(maxarcat_client.STACApi(api_client=self._api_client))
+        self._coll_api = self._setup_api(maxarcat_client.STACCOLLECTIONApi(api_client=self._api_client))
+        self._item_api = self._setup_api(maxarcat_client.STACITEMApi(api_client=self._api_client))
+
+    def close(self):
+        """
+        Release resources held by this Catalog (the shared ApiClient's thread pool).
+        After calling close() the Catalog can no longer be used for API calls.
+        """
+        if getattr(self, '_api_client', None) is not None:
+            self._api_client.pool.close()
+            self._api_client.pool.join()
+            self._api_client = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
 
     def _setup_api(self, api):
         # Hack to get auth to work.  I'm not sure how to setup auth for the swagger
@@ -288,7 +308,10 @@ class Catalog:
                 yield feature
             num_features = len(feature_coll.features)
             feature_count += num_features
-            if not num_features:
+            has_next = bool(feature_coll.links) and any(
+                (link.get('rel') if isinstance(link, dict) else getattr(link, 'rel', None)) == 'next'
+                for link in feature_coll.links)
+            if not num_features or not has_next:
                 Catalog.logger.info(f'Total features returned: {feature_count}')
                 return
 
@@ -386,8 +409,13 @@ class Catalog:
             if request_id:
                 Catalog.logger.info(f'Request ID: {request_id}')
 
-            # Secret feature:  Stash response so user can examine it in case of error
-            self.last_response = body
+            # Secret feature:  Stash a weak reference to the response so the user can
+            # examine it in case of error, without preventing garbage collection.
+            try:
+                self.last_response = weakref.ref(body)
+            except TypeError:
+                # Some objects cannot be weak-referenced; just drop it
+                self.last_response = None
             return body
         except maxarcat_client.rest.ApiException as exp:
             # Upon errors the Catalog methods generally return JSON with a "message" property.
