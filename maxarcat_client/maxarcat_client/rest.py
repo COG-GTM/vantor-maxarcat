@@ -104,6 +104,19 @@ class RESTClientObject(object):
                 **addition_pool_args
             )
 
+    # NOTE: close() is a manual addition to the swagger-codegen output.
+    # Preserve it when regenerating this client.
+    def close(self):
+        """Release all pooled connections held by the pool manager.
+
+        Idempotent: safe to call more than once.
+        """
+        pool_manager = getattr(self, 'pool_manager', None)
+        if pool_manager is None:
+            return
+        self.pool_manager = None
+        pool_manager.clear()
+
     def request(self, method, url, query_params=None, headers=None,
                 body=None, post_params=None, _preload_content=True,
                 _request_timeout=None):

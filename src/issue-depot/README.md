@@ -39,6 +39,7 @@ Environment variables:
 - `SENTRY_WEBHOOK_SECRET`: Secret for validating Sentry webhooks
 - `DEVIN_API_KEY`: API key for Devin integration
 - `DEVIN_API_URL`: Devin API endpoint
+- `ISSUE_DEPOT_MAX_ISSUES`: Maximum bug reports kept in memory; oldest are evicted first (default: 1000)
 
 ### Running the Service
 

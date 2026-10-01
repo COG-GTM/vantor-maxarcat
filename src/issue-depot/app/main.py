@@ -10,6 +10,7 @@ import json
 import re
 import hashlib
 import hmac
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Optional
 from enum import Enum
@@ -107,8 +108,29 @@ class DevinSessionResponse(BaseModel):
     session_url: str
 
 
-issues_db: dict[str, dict] = {}
-assessments_db: dict[str, AssessmentResult] = {}
+# Maximum number of bug reports retained in memory.  Oldest entries are evicted
+# first once the cap is reached, so /api/v1/bugs and /api/v1/stats only reflect
+# the most recent ISSUE_DEPOT_MAX_ISSUES reports.
+ISSUE_DEPOT_MAX_ISSUES = int(os.getenv("ISSUE_DEPOT_MAX_ISSUES", "1000"))
+
+
+class BoundedStore(OrderedDict):
+    """Insertion-ordered dict that evicts its oldest entries beyond ``maxsize``."""
+
+    def __init__(self, maxsize: int):
+        if maxsize < 1:
+            raise ValueError("maxsize must be at least 1")
+        super().__init__()
+        self.maxsize = maxsize
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        while len(self) > self.maxsize:
+            self.popitem(last=False)
+
+
+issues_db: BoundedStore = BoundedStore(ISSUE_DEPOT_MAX_ISSUES)
+assessments_db: BoundedStore = BoundedStore(ISSUE_DEPOT_MAX_ISSUES)
 
 
 def log_security_event(event_type: str, client_ip: str, details: Optional[dict] = None):
