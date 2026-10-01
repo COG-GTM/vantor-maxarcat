@@ -73,10 +73,66 @@ class ApiClient(object):
         self.cookie = cookie
         # Set default User-Agent.
         self.user_agent = 'Swagger-Codegen/0.1/python'
+        self.last_response = None
+        # Paths returned by __deserialize_file.  The caller owns these files;
+        # see remove_temp_files().
+        self.temp_files = []
+        self._async_results = []
+        self._closed = False
+
+    # NOTE: close(), __enter__/__exit__, remove_temp_files() and the
+    # last_response/temp_files/_async_results bookkeeping are manual additions
+    # to the swagger-codegen output.  Preserve them when regenerating.
+    def close(self):
+        """Shut down the thread pool and release HTTP connections.
+
+        Outstanding ``async_req`` calls are waited on before the pool is
+        joined.  Idempotent: safe to call more than once.  Temporary files
+        returned by file-typed endpoints are not removed; call
+        ``remove_temp_files()`` for that.
+        """
+        if getattr(self, '_closed', True):
+            return
+        self._closed = True
+        for result in self._async_results:
+            try:
+                result.wait()
+            except Exception:  # noqa: B902
+                pass
+        self._async_results = []
+        self.last_response = None
+        pool = getattr(self, 'pool', None)
+        if pool is not None:
+            self.pool = None
+            pool.close()
+            pool.join()
+        rest_client = getattr(self, 'rest_client', None)
+        if rest_client is not None:
+            rest_client.close()
+
+    def remove_temp_files(self):
+        """Delete files created by file-typed responses and forget them.
+
+        Only call this once the caller no longer needs the returned paths.
+        """
+        for path in self.temp_files:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        self.temp_files = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
 
     def __del__(self):
-        self.pool.close()
-        self.pool.join()
+        try:
+            self.close()
+        except Exception:  # noqa: B902
+            pass
 
     @property
     def user_agent(self):
@@ -98,6 +154,7 @@ class ApiClient(object):
             _preload_content=True, _request_timeout=None):
 
         config = self.configuration
+        self.last_response = None
 
         # header parameters
         header_params = header_params or {}
@@ -320,6 +377,8 @@ class ApiClient(object):
                                    _return_http_data_only, collection_formats,
                                    _preload_content, _request_timeout)
         else:
+            if self._closed:
+                raise ValueError('ApiClient is closed')
             thread = self.pool.apply_async(self.__call_api, (resource_path,
                                            method, path_params, query_params,
                                            header_params, body,
@@ -328,6 +387,11 @@ class ApiClient(object):
                                            _return_http_data_only,
                                            collection_formats,
                                            _preload_content, _request_timeout))
+            # Callers own the AsyncResult and should consume it; the list is
+            # pruned of finished results so it stays bounded.
+            self._async_results = [r for r in self._async_results
+                                   if not r.ready()]
+            self._async_results.append(thread)
         return thread
 
     def request(self, method, url, query_params=None, headers=None,
@@ -511,6 +575,10 @@ class ApiClient(object):
         Saves response body into a file in a temporary folder,
         using the filename from the `Content-Disposition` header if provided.
 
+        The returned file is never deleted by the client.  The caller must
+        remove it when done, or call ``remove_temp_files()`` on this
+        ApiClient; the path is recorded in ``self.temp_files``.
+
         :param response:  RESTResponse.
         :return: file path.
         """
@@ -531,6 +599,7 @@ class ApiClient(object):
                     f.write(response_data)
                 else:
                     f.write(response_data)
+        self.temp_files.append(path)
         return path
 
     def __deserialize_primitive(self, data, klass):

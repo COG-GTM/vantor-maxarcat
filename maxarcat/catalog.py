@@ -43,11 +43,44 @@ class Catalog:
         self._token = token
         self.url = url if url else self.default_catalog_url
         self.last_response = None
+        self._closed = False
+
+        # Session reused by get_url/get_url_json; closed by close()
+        self._session = requests.Session()
 
         # Setup the swagger clients
         self._stac_api = self._setup_api(maxarcat_client.STACApi())
         self._coll_api = self._setup_api(maxarcat_client.STACCOLLECTIONApi())
         self._item_api = self._setup_api(maxarcat_client.STACITEMApi())
+
+    def close(self):
+        """
+        Release the thread pools, HTTP connection pools and cached response held by this Catalog.
+        Safe to call more than once.  The Catalog must not be used after it is closed.
+        """
+        if getattr(self, '_closed', True):
+            return
+        self._closed = True
+        self.last_response = None
+        for name in ('_stac_api', '_coll_api', '_item_api'):
+            api = getattr(self, name, None)
+            if api is not None:
+                api.api_client.close()
+        session = getattr(self, '_session', None)
+        if session is not None:
+            session.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _setup_api(self, api):
         # Hack to get auth to work.  I'm not sure how to setup auth for the swagger
@@ -350,7 +383,7 @@ class Catalog:
         :return: Response body as bytes
         """
         logging.info(f'GET {url}')
-        return self._request_url(requests.get, url)
+        return self._request_url(self._session.get, url)
 
     def get_url_json(self, url: str):
         """
@@ -360,7 +393,7 @@ class Catalog:
         :return: Parsed JSON, generally returning a dict
         """
         logging.info(f'GET {url}')
-        response = self._request_url(requests.get, url)
+        response = self._request_url(self._session.get, url)
         try:
             return json.loads(str(response, encoding='utf-8'))
         except Exception as exp:
@@ -377,6 +410,7 @@ class Catalog:
         :return: Service response parsed as a model object
         """
 
+        self.last_response = None
         try:
             with Catalog.timer():
                 (body, status_code, headers) = function(*args, **kwargs)
@@ -407,7 +441,7 @@ class Catalog:
     def _request_url(self, function, *args, **kwargs):
         """
         Process a call to a requests method
-        :param function: Method in the requests package, e.g. requests.get
+        :param function: Method on a requests Session, e.g. self._session.get
         :param args: Arbitrary arguments to pass to function
         :param kwargs: Arbitrar keyword arguments to pass to function
         :return: Response body
@@ -422,6 +456,10 @@ class Catalog:
             Catalog.logger.error(exp)
             raise
 
+        with response:
+            return self._process_response(response)
+
+    def _process_response(self, response):
         Catalog.logger.info(f'HTTP Status: {response.status_code}')
 
         request_id = response.headers.get('X-Maxar-RequestId')
