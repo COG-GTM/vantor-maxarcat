@@ -10,7 +10,7 @@ from unittest import mock
 import pytest
 
 import maxarcat_client
-from maxarcat import Catalog
+from maxarcat import Catalog, CatalogError
 
 
 class TestApiClientClose:
@@ -64,9 +64,11 @@ class TestApiClientClose:
         client.close()
 
     @staticmethod
-    def test_async_call_after_close_raises():
+    def test_call_after_close_raises():
         client = maxarcat_client.ApiClient()
         client.close()
+        with pytest.raises(ValueError):
+            client.call_api('/x', 'GET')
         with pytest.raises(ValueError):
             client.call_api('/x', 'GET', async_req=True)
 
@@ -107,6 +109,17 @@ class TestCatalogClose:
             client = catalog._stac_api.api_client
             assert client.pool is not None
         assert client.pool is None
+
+    @staticmethod
+    def test_calls_after_close_raise():
+        catalog = Catalog(token='fake-token')
+        catalog.close()
+        with mock.patch.object(catalog._session, 'get') as get:
+            with pytest.raises(CatalogError):
+                catalog.get_url('https://example.invalid/asset')
+            get.assert_not_called()
+        with pytest.raises(CatalogError):
+            catalog.get_healthcheck()
 
     @staticmethod
     def test_request_url_uses_session_and_closes_response():

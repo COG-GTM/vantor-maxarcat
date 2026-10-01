@@ -369,6 +369,8 @@ class ApiClient(object):
             If parameter async_req is False or missing,
             then the method will return the response directly.
         """
+        if self._closed:
+            raise ValueError('ApiClient is closed')
         if not async_req:
             return self.__call_api(resource_path, method,
                                    path_params, query_params, header_params,
@@ -377,8 +379,6 @@ class ApiClient(object):
                                    _return_http_data_only, collection_formats,
                                    _preload_content, _request_timeout)
         else:
-            if self._closed:
-                raise ValueError('ApiClient is closed')
             thread = self.pool.apply_async(self.__call_api, (resource_path,
                                            method, path_params, query_params,
                                            header_params, body,

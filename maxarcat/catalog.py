@@ -70,6 +70,10 @@ class Catalog:
         if session is not None:
             session.close()
 
+    def _check_open(self):
+        if self._closed:
+            raise CatalogError('Catalog is closed')
+
     def __enter__(self):
         return self
 
@@ -410,6 +414,7 @@ class Catalog:
         :return: Service response parsed as a model object
         """
 
+        self._check_open()
         self.last_response = None
         try:
             with Catalog.timer():
@@ -446,6 +451,7 @@ class Catalog:
         :param kwargs: Arbitrar keyword arguments to pass to function
         :return: Response body
         """
+        self._check_open()
         try:
             headers = {
                 'Authorization': f'Bearer {self._token}'
